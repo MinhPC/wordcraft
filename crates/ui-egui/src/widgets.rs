@@ -803,6 +803,8 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
     resp.on_hover_text(tip)
 }
 
@@ -810,22 +812,36 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
 /// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
 /// It looks and reacts like `ui.button` (see [`drawn_state`]).
 pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, false)
+    icon_text_button_with(ui, icon, text, font, false, false)
+}
+
+/// [`icon_text_button`] that drops its text for a bare icon when `compact` (a narrow window); the
+/// text stays its tooltip and accessible name.
+pub fn icon_text_button_adaptive(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, compact: bool) -> Response {
+    icon_text_button_with(ui, icon, text, font, false, compact)
+}
+
+/// [`icon_text_menu_button`] with the same `compact` form.
+pub fn icon_text_menu_button_adaptive(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, compact: bool) -> Response {
+    icon_text_button_with(ui, icon, text, font, true, compact)
 }
 
 /// [`icon_text_button`] that opens a menu: the drop-down marker follows the text.
 pub fn icon_text_menu_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, true)
+    icon_text_button_with(ui, icon, text, font, true, false)
 }
 
-fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool) -> Response {
+fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, compact: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let pad = ui.spacing().button_padding;
     let icon_w = 16.0;
     let marker_w = if marker { DROPDOWN + 4.0 } else { 0.0 };
-    let size = vec2(pad.x + icon_w + 4.0 + galley.size().x + marker_w + pad.x, galley.size().y.max(icon_w) + 2.0 * pad.y);
+    let text_w = if compact { 0.0 } else { galley.size().x + 4.0 };
+    let size = vec2(pad.x + icon_w + text_w + marker_w + pad.x, galley.size().y.max(icon_w) + 2.0 * pad.y);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text));
     let st = drawn_state(ui, &resp, true);
     let r = r.expand(st.expansion);
     ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
@@ -837,13 +853,15 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
         t.accent,
     );
     let text_x = r.min.x + pad.x + icon_w + 4.0;
-    let text_w = galley.size().x;
-    ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+    let text_w = if compact { -4.0 } else { galley.size().x };
+    if !compact {
+        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+    }
     if marker {
         let c = pos2(text_x + text_w + 4.0 + DROPDOWN / 2.0, r.center().y);
         icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", st.text, st.text);
     }
-    resp
+    if compact { resp.on_hover_text(text) } else { resp }
 }
 
 #[cfg(test)]

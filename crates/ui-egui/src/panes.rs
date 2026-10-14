@@ -2,7 +2,7 @@
 //! Accessibility and Alt Text (see `a11y_pane`), Restrict Editing ([`crate::dialogs_review`]), Comments,
 //! and the SmartArt Text Pane.
 
-use egui::{Stroke, Ui, vec2};
+use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -146,9 +146,46 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| match app.ui.nav_tab.as_str() {
         "pages" => {
             let l = app.session.layout();
+            let t = Tokens::get(ui.ctx());
+            let ppp = ui.ctx().pixels_per_point();
+            let rev = app.session.rev();
+            let dark = app.session.view.dark_mode;
             for (i, p) in l.pages.iter().enumerate() {
                 let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
-                if ui.selectable_label(app.session.page_hint == i, label).clicked() {
+                // A thumbnail of the page as it looks, drawn only while it is scrolled into view and
+                // reused until the document changes; the page number sits under it.
+                let (tw, th) = nav_thumb_size(ui.available_width(), p.w, p.h);
+                let selected = app.session.page_hint == i;
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), th + 22.0), Sense::click());
+                let thumb = Rect::from_center_size(pos2(r.center().x, r.min.y + 4.0 + th / 2.0), vec2(tw, th));
+                if selected {
+                    ui.painter().rect_filled(r, 4.0, t.accent.gamma_multiply(0.18));
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(r, 4.0, t.hover);
+                }
+                ui.painter().rect_filled(thumb, 1.0, egui::Color32::WHITE);
+                if ui.is_rect_visible(r) {
+                    let key = format!("nav:{rev}:{i}:{ppp}:{dark}");
+                    let doc = &app.session.doc;
+                    let tex = app.previews.get_or(ui.ctx(), &key, || {
+                        let scale = (tw * ppp / p.w.max(1.0)).clamp(0.02, 4.0);
+                        let img = wordcraft_render::render_page(doc, p, scale, &crate::canvas::screen_render_options());
+                        let px = img.to_straight();
+                        Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+                    });
+                    if let Some(h) = tex {
+                        ui.painter().image(h.id(), thumb, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    }
+                }
+                ui.painter().rect_stroke(
+                    thumb,
+                    1.0,
+                    Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.border_strong }),
+                    egui::StrokeKind::Outside,
+                );
+                ui.painter().text(pos2(r.center().x, r.max.y - 10.0), egui::Align2::CENTER_CENTER, &label, regular(11.5), t.text_dim);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &label));
+                if resp.clicked() {
                     let _ = app.run("edit.goto", json!({"page": i + 1}));
                 }
             }
@@ -210,6 +247,14 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
     });
+}
+
+/// Size of a Navigation pane page thumbnail: as wide as the pane allows (up to 150 pt), the
+/// page's own proportions, never taller than 200 pt.
+fn nav_thumb_size(avail_w: f32, page_w: f32, page_h: f32) -> (f32, f32) {
+    let ratio = if page_w > 0.0 && page_h > 0.0 { page_h / page_w } else { 11.0 / 8.5 };
+    let w = (avail_w - 16.0).clamp(24.0, 150.0).min(200.0 / ratio);
+    (w, w * ratio)
 }
 
 /// Constrain each heading to the available pane width so long document text cannot
@@ -772,5 +817,22 @@ mod navigation_tests {
             );
             output.drop_without_applying_deltas();
         }
+    }
+}
+
+#[cfg(test)]
+mod nav_thumb_tests {
+    use super::nav_thumb_size;
+
+    #[test]
+    fn thumbnails_keep_the_page_proportions_and_fit_the_pane() {
+        let (w, h) = nav_thumb_size(300.0, 612.0, 792.0);
+        assert!((w - 150.0).abs() < 1e-3 && (h / w - 792.0 / 612.0).abs() < 1e-3);
+        // A narrow pane: smaller, never below the floor.
+        assert!(nav_thumb_size(60.0, 612.0, 792.0).0 <= 44.0);
+        assert!(nav_thumb_size(0.0, 612.0, 792.0).0 >= 24.0);
+        // A very tall page is capped in height; a zero-sized page doesn't divide by zero.
+        assert!(nav_thumb_size(300.0, 100.0, 1000.0).1 <= 200.0 + 1e-3);
+        assert!(nav_thumb_size(300.0, 0.0, 0.0).1.is_finite());
     }
 }

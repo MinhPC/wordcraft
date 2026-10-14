@@ -2237,7 +2237,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if *swallow {
                 ui.ctx().input_mut(|i| i.events.retain(|e| !swallow_shortcut_text(swallow, e)));
             }
-            let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
+            // Narrow windows: the box and its rows shrink to fit.
+            let w = 380.0_f32.min((ui.ctx().content_rect().width() - 80.0).max(200.0));
+            let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(w));
             r.request_focus();
             let reg = app.session.registry.clone();
             // An empty box suggests a few common commands, as Word's Search does.
@@ -2247,23 +2249,55 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             } else {
                 reg.all().iter().filter(|c| command_matches(c, query)).collect()
             };
-            hits.truncate(14);
+            // Commands that can run now come first; the rest follow, dimmed, with their reason.
+            let reasons: Vec<Option<&'static str>> = hits.iter().map(|c| (c.enabled)(&app.session)).collect();
+            let mut order: Vec<usize> = (0..hits.len()).collect();
+            order.sort_by_key(|i| reasons.get(*i).is_some_and(Option::is_some));
+            let hits_sorted: Vec<(&wordcraft_engine::CommandSpec, Option<&'static str>)> =
+                order.into_iter().filter_map(|i| Some((*hits.get(i)?, reasons.get(i).copied().flatten()))).take(14).collect();
+            hits.clear();
+            // Arrow keys move the highlighted row (reset when the query changes); Enter runs it.
+            let sel_id = egui::Id::new("command_search_selection");
+            let (last_q, mut sel) = ui.ctx().data(|d| d.get_temp::<(String, usize)>(sel_id)).unwrap_or_default();
+            if last_q != *query {
+                sel = 0;
+            }
+            let runnable: Vec<usize> = hits_sorted.iter().enumerate().filter(|(_, (_, why))| why.is_none()).map(|(i, _)| i).collect();
+            let (down, up) = ui.input(|i| (i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowUp)));
+            if !runnable.is_empty() {
+                if down {
+                    sel = (sel + 1) % runnable.len();
+                }
+                if up {
+                    sel = (sel + runnable.len() - 1) % runnable.len();
+                }
+                sel = sel.min(runnable.len() - 1);
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(sel_id, (query.clone(), sel)));
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let mut run: Option<&str> = enter.then(|| hits.first().map(|c| c.id)).flatten();
-            for c in &hits {
+            let chosen = runnable.get(sel).copied();
+            let mut run: Option<&str> = if enter { chosen.and_then(|i| hits_sorted.get(i)).map(|(c, _)| c.id) } else { None };
+            for (i, (c, why)) in hits_sorted.iter().enumerate() {
                 let sc = crate::widgets::shortcut_text(app, c.id);
                 let label = format!("{}   —   {}", tl!(c.label), crate::i18n::location(c.location));
-                if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(380.0, 0.0))).clicked() {
+                let text = egui::RichText::new(label);
+                let text = if why.is_some() { text.weak() } else { text };
+                let resp =
+                    ui.add_enabled(why.is_none(), egui::Button::new(text).shortcut_text(sc).selected(chosen == Some(i)).min_size(vec2(w, 0.0)));
+                if let Some(why) = why {
+                    resp.on_disabled_hover_text(*why);
+                } else if resp.clicked() {
                     run = Some(c.id);
                 }
             }
+            let enter_no_hits = enter && runnable.is_empty();
             // Search also finds the words in the document (the Navigation pane's results).
             let text = query.trim().to_string();
             let mut find = false;
             if !text.is_empty() {
                 ui.separator();
                 let label = crate::i18n::fmt(tl!("Find “{text}” in the document"), &[("text", &text)]);
-                find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
+                find = ui.add(egui::Button::new(label).min_size(vec2(w, 0.0))).clicked() || enter_no_hits;
             }
             if let Some(id) = run {
                 let _ = app.run(id, json!({}));

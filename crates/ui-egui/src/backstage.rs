@@ -229,8 +229,9 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
             "Good evening"
         },
     );
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
+    // Tiles wrap onto a new row when the window is too narrow for all of them.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
         for (label, template) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
             template_tile(ui, app, label, template);
         }
@@ -250,7 +251,8 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "New");
     let id = egui::Id::new("backstage_template_search");
     let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
-    let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
+    let search =
+        ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0_f32.min(ui.available_width())));
     if search.changed() {
         ui.ctx().data_mut(|d| d.insert_temp(id, query.clone()));
     }

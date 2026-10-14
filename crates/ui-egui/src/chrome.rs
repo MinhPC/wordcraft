@@ -237,6 +237,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
                 ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
+                let enabled = ui.is_enabled() && block.is_none();
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, tl!("AutoSave")));
                 let tip = block
                     .as_ref()
                     .map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
@@ -261,9 +263,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
                     let initials: String = app.session.user_initials().chars().take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
-                    resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author));
+                    let who = format!("{} — set your name in File › Options", app.session.author);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &who));
+                    resp.on_hover_text(who);
                     ui.add_space(8.0);
-                    if app.ui.show_discord {
+                    if app.ui.show_discord && full.width() >= 900.0 {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
                         ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
                         icons::paint(
@@ -274,33 +278,36 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             t.on_accent,
                         );
                         ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), t.on_accent);
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Discord")));
                         if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                             let _ = app.run("ui.discord", json!({}));
                         }
                         ui.add_space(8.0);
                     }
                     // Search ("Tell me").
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+                    // The box narrows with the window and becomes a bare icon when it can't hold its
+                    // placeholder, leaving room for the document title.
+                    let search_w = search_box_width(full.width());
+                    let (r, resp) = ui.allocate_exact_size(vec2(search_w, control_h), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)),
-                        "search",
-                        t.text_dim,
-                        t.accent,
-                    );
+                    let with_text = search_w >= SEARCH_TEXT_MIN_W;
+                    let icon_x = if with_text { r.min.x + 16.0 } else { r.center().x };
+                    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
                     let ph = tl!("Search commands and help");
-                    let pfont = TypeRung::Control.regular();
-                    let ptrack = TypeRung::Control.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        ph,
-                        &pfont,
-                        ptrack,
-                        t.text_dim,
-                    );
+                    if with_text {
+                        let pfont = TypeRung::Control.regular();
+                        let ptrack = TypeRung::Control.tracking();
+                        paint_text(
+                            ui.painter(),
+                            pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
+                            Align2::LEFT_TOP,
+                            ph,
+                            &pfont,
+                            ptrack,
+                            t.text_dim,
+                        );
+                    }
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, ph));
                     if app.ui.keytips == crate::keytips::Phase::Tabs {
                         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
                     }
@@ -314,31 +321,32 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     right_start = ui.min_rect().min.x;
                 });
             });
-            // Centred title.
-            let title = if !app.has_document() {
-                // No document open (#1129): the app's name alone.
-                "WordCraft".to_string()
-            } else {
-                format!(
-                    "{} — {}",
-                    app.title_stem(),
-                    if app.session.dirty {
-                        tl!("Edited")
-                    } else if app.session.path.is_some() {
-                        tl!("Saved")
-                    } else {
-                        tl!("Not saved")
-                    }
-                )
-            };
+            // Centred title. In a narrow window the name is shortened with an ellipsis and the
+            // save state ("Saved", "Edited") always stays; the title sits off-centre rather than
+            // disappearing when the centre is taken.
             let font = TypeRung::Chrome.semibold();
             let track = TypeRung::Chrome.tracking();
-            let w = text_width(ui.painter(), &title, &font, track, t.text);
-            let cx = full.center().x;
-            if cx - w / 2.0 > qat_end + 10.0 && cx + w / 2.0 < right_start - 10.0 {
+            let (lo, hi) = (qat_end + 10.0, right_start - 10.0);
+            let title = if !app.has_document() {
+                // No document open (#1129): the app's name alone.
+                Some("WordCraft".to_string())
+            } else {
+                let state = if app.session.dirty {
+                    tl!("Edited")
+                } else if app.session.path.is_some() {
+                    tl!("Saved")
+                } else {
+                    tl!("Not saved")
+                };
+                let stem = app.title_stem();
+                fit_title(&stem, state, hi - lo, |s| text_width(ui.painter(), s, &font, track, t.text))
+            };
+            if let Some(title) = title {
+                let w = text_width(ui.painter(), &title, &font, track, t.text);
+                let x = (full.center().x - w / 2.0).clamp(lo, (hi - w).max(lo));
                 paint_text(
                     ui.painter(),
-                    pos2(cx - w / 2.0, full.center().y - TypeRung::Chrome.line_height() / 2.0),
+                    pos2(x, full.center().y - TypeRung::Chrome.line_height() / 2.0),
                     Align2::LEFT_TOP,
                     &title,
                     &font,
@@ -347,6 +355,41 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 );
             }
         });
+}
+
+/// The search box's width in a title bar `bar_w` wide: 260 px when there's room, narrowing with the
+/// window down to a bare icon.
+fn search_box_width(bar_w: f32) -> f32 {
+    (bar_w * 0.24).clamp(30.0, 260.0)
+}
+/// Below this width the search box shows only its icon.
+const SEARCH_TEXT_MIN_W: f32 = 150.0;
+
+/// `name — state` fitted into `avail` px: the whole title, else the name shortened with `…`, else
+/// the state alone, else nothing. `width` measures a string.
+fn fit_title(name: &str, state: &str, avail: f32, width: impl Fn(&str) -> f32) -> Option<String> {
+    let full = format!("{name} — {state}");
+    if width(&full) <= avail {
+        return Some(full);
+    }
+    // Longest prefix of the name (cut at a char boundary) that fits with the ellipsis.
+    let chars: Vec<(usize, char)> = name.char_indices().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let end = chars.get(mid).map_or(name.len(), |c| c.0);
+        let cand = format!("{}… — {state}", name.get(..end).unwrap_or(""));
+        if width(&cand) <= avail {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo > 0 {
+        let end = chars.get(lo).map_or(name.len(), |c| c.0);
+        return Some(format!("{}… — {state}", name.get(..end).unwrap_or("")));
+    }
+    (width(state) <= avail).then(|| state.to_string())
 }
 
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -507,6 +550,8 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
     icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
+    let enabled = ui.is_enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
     resp.on_hover_text(tip).clicked()
 }
 
@@ -519,6 +564,38 @@ impl WordApp {
             self.word_count = (key, self.session.word_count());
         }
         self.word_count.1
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    fn w(s: &str) -> f32 {
+        s.chars().count() as f32 * 7.0
+    }
+
+    #[test]
+    fn the_title_shrinks_but_keeps_the_save_state() {
+        // Fits: unchanged.
+        assert_eq!(fit_title("Report", "Saved", 500.0, w).as_deref(), Some("Report — Saved"));
+        // Narrow: the name is shortened, the state stays.
+        let s = fit_title("A very long document name", "Edited", 150.0, w).unwrap();
+        assert!(s.ends_with("… — Edited") && w(&s) <= 150.0, "{s}");
+        // Narrower still: the state alone; nothing when even that doesn't fit.
+        assert_eq!(fit_title("A very long document name", "Edited", 50.0, w).as_deref(), Some("Edited"));
+        assert_eq!(fit_title("Name", "Edited", 10.0, w), None);
+        // Multi-byte names are cut at char boundaries.
+        let s = fit_title("Báo cáo tài chính quý ba", "Saved", 120.0, w).unwrap();
+        assert!(s.ends_with("— Saved"), "{s}");
+    }
+
+    #[test]
+    fn the_search_box_narrows_to_an_icon() {
+        assert_eq!(search_box_width(1600.0), 260.0);
+        assert!(search_box_width(800.0) < 260.0);
+        assert!(search_box_width(300.0) < SEARCH_TEXT_MIN_W);
+        assert!(search_box_width(0.0) >= 30.0);
     }
 }
 
