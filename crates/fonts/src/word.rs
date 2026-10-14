@@ -1,6 +1,7 @@
 //! Word-processor font resolution: map a requested family + bold/italic to an available face,
 //! with metric-compatible substitutes for common proprietary document fonts, and Word-style line
-//! metrics (Windows ascent/descent, which is what Word uses for single line spacing).
+//! metrics (hhea ascent + line gap above, descent; OS/2 win metrics only when hhea is missing —
+//! this reproduces Word's single line spacing, e.g. 1.15 em for Times New Roman).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -27,6 +28,14 @@ pub struct Resolved {
 fn substitutes(family: &str) -> &'static [&'static str] {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
+    // Verdana and Tahoma are wide: DejaVu Sans (Bitstream Vera lineage) is the closest open width.
+    const WIDE_SANS: &[&str] = &["DejaVu Sans", "Verdana", "Tahoma", "Segoe UI", "Noto Sans", "Liberation Sans", "Source Sans 3"];
+    const NARROW: &[&str] = &["Liberation Sans Narrow", "Arial Narrow", "Arimo", "Liberation Sans", "Helvetica Neue", "Source Sans 3"];
+    // Consolas is narrower than Courier New (0.55 em vs 0.6): Inconsolata has the same advance.
+    const CONSOLAS: &[&str] = &["Inconsolata", "Consolas", "Menlo", "Courier New", "Liberation Mono", "DejaVu Sans Mono", "JetBrains Mono"];
+    // Math fonts: the OpenType MATH-table faces first (equations use `math::resolve_math`), then serif.
+    const MATH: &[&str] =
+        &["STIX Two Math", "XITS Math", "Libertinus Math", "Latin Modern Math", "Noto Sans Math", "Caladea", "Times New Roman", "Liberation Serif"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
@@ -64,13 +73,16 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         return ARABIC_SANS;
     }
     match f.as_str() {
+        "verdana" | "tahoma" | "segoe ui" | "trebuchet ms" | "comic sans ms" => WIDE_SANS,
+        "arial narrow" => NARROW,
+        "consolas" => CONSOLAS,
+        "cambria math" => MATH,
         "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
         "arial" | "helvetica" | "arial nova" => ARIAL,
         "times new roman" | "times" => TIMES,
-        "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => MONO,
+        "courier new" | "courier" | "lucida console" | "cascadia code" | "cascadia mono" => MONO,
         "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => SYMBOL,
         "cambria"
-        | "cambria math"
         | "georgia"
         | "garamond"
         | "constantia"
@@ -81,10 +93,24 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         | "sitka text"
         | "sitka"
         | "aptos serif" => SERIF,
-        _ if f.contains("mono") || f.contains("code") => MONO,
+        _ if is_mono_name(&f) => MONO,
         _ if f.contains("serif") && !f.contains("sans") => SERIF,
         _ => SANS,
     }
+}
+
+/// Whether a (lowercase) family name looks like a monospace face: a whole word "mono" / "code"
+/// ("DejaVu Sans Mono", "Source Code Pro") or a name ending in "mono" ("JetBrainsMono"). Plain
+/// substring matching would catch "Arial Unicode MS" and "Monotype Corsiva".
+fn is_mono_name(f: &str) -> bool {
+    f.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "mono" | "code" | "monospace" | "firacode") || (w.len() > 4 && w.ends_with("mono")))
+}
+
+/// Substitutes for `family`, looking through Windows charset aliases ("Arial CE" → Arial) except
+/// for Persian/Arabic names that are listed as themselves ("Times New Roman (Arabic)").
+fn substitutes_for(family: &str) -> &'static [&'static str] {
+    let f = family.trim_end().to_ascii_lowercase();
+    if is_persian_naskh(&f) || is_persian_sans(&f) { substitutes(family) } else { substitutes(charset_base_family(family)) }
 }
 
 /// The font a Windows 3.1-era charset name stands for: `Times New Roman Cyr`, `Arial CE`,
@@ -173,7 +199,6 @@ fn is_persian_sans(f: &str) -> bool {
         "iranyekanweb",
         "dana",
         "estedad",
-        "dubai",
         "aldhabi",
         "urdu typesetting",
         "arabic transparent",
@@ -215,13 +240,17 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
         // Windows maps the charset names to the font itself: not a substitution.
         (base.to_string(), false)
     } else {
-        let s = substitutes(base).iter().find(|s| db.has_family(s)).copied().unwrap_or(crate::FALLBACK_FAMILY);
+        let s = substitutes_for(family).iter().find(|s| db.has_family(s)).copied().unwrap_or(crate::FALLBACK_FAMILY);
         (s.to_string(), true)
     };
     let face = db.face(&fam, style_name(bold, italic));
     let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
     let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
     if c.0 == generation {
+        // Family names come from documents: keep the memo bounded.
+        if c.1.len() >= 4096 {
+            c.1.clear();
+        }
         c.1.insert(key, r);
     }
     r
@@ -304,6 +333,37 @@ mod tests {
         assert_eq!(charset_base_family("Cyr"), "Cyr");
         assert_eq!(charset_base_family("Calibri"), "Calibri");
         assert_eq!(substitutes(charset_base_family("Times New Roman Cyr")), substitutes("Times New Roman"));
+    }
+
+    #[test]
+    fn mono_detection_uses_whole_words() {
+        for f in ["DejaVu Sans Mono", "Source Code Pro", "JetBrainsMono", "Roboto Mono", "FiraCode"] {
+            assert_eq!(substitutes(f), substitutes("Courier New"), "{f}");
+        }
+        for f in ["Arial Unicode MS", "Lucida Sans Unicode", "Monotype Corsiva", "Barcode 39"] {
+            assert_ne!(substitutes(f), substitutes("Courier New"), "{f}");
+        }
+    }
+
+    #[test]
+    fn arabic_charset_alias_keeps_the_naskh_substitutes() {
+        assert_eq!(substitutes_for("Times New Roman (Arabic)"), substitutes("B Nazanin"));
+        assert_eq!(substitutes_for("Times New Roman Cyr"), substitutes("Times New Roman"));
+        assert_eq!(substitutes_for("Arial (Hebrew)"), substitutes("Arial"));
+    }
+
+    #[test]
+    fn word_fonts_get_closest_open_substitutes() {
+        assert_eq!(substitutes("Verdana").first(), Some(&"DejaVu Sans"));
+        assert_eq!(substitutes("Tahoma").first(), Some(&"DejaVu Sans"));
+        assert_eq!(substitutes("Arial Narrow").first(), Some(&"Liberation Sans Narrow"));
+        assert_eq!(substitutes("Consolas").first(), Some(&"Inconsolata"));
+        assert_eq!(substitutes("Cambria Math").first(), Some(&"STIX Two Math"));
+        // Dubai is a Latin + Arabic face: its Latin text isn't drawn with an Arabic-only substitute.
+        assert_eq!(substitutes("Dubai"), substitutes("Calibri"));
+        // Unchanged.
+        assert_eq!(substitutes("Calibri").first(), Some(&"Carlito"));
+        assert_eq!(substitutes("Cambria").first(), Some(&"Caladea"));
     }
 
     #[test]
