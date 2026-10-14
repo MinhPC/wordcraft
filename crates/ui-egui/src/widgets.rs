@@ -6,16 +6,20 @@ use serde_json::Value;
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
+/// Size of ribbon button labels, points. 12 stays legible at 100% display scale, where 11.5
+/// looked thin; see [`LABEL_LINE_H`].
+pub const RIBBON_LABEL_PT: f32 = 12.0;
+
 /// Height of the ribbon content area (without group labels).
 pub const CONTENT_H: f32 = 66.0;
 /// Height of the group title row under the content.
 pub const LABEL_H: f32 = 18.0;
 /// Large buttons: centre of the 32 px icon, top of the first label line, and the pitch and
-/// height of a label line (`regular(11.5)`; a test checks the font's real line height).
+/// height of a label line (`regular(RIBBON_LABEL_PT)`; a test checks the font's real line height).
 pub const BIG_ICON_Y: f32 = 18.0;
 pub const BIG_LABEL_Y: f32 = 36.0;
-pub const LABEL_PITCH: f32 = 13.0;
-pub const LABEL_LINE_H: f32 = 14.0;
+pub const LABEL_PITCH: f32 = 14.0;
+pub const LABEL_LINE_H: f32 = 15.0;
 // #653: a two-line label ends inside the content, above the group title row.
 const _: () = assert!(BIG_LABEL_Y + LABEL_PITCH + LABEL_LINE_H <= CONTENT_H);
 const _: () = assert!(BIG_ICON_Y + 16.0 <= BIG_LABEL_Y);
@@ -161,8 +165,10 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
-    let galley_w =
-        label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
+    let galley_w = label
+        .split('\n')
+        .map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(RIBBON_LABEL_PT), t.text).size().x))
+        .fold(0.0, f32::max);
     let w = (galley_w + 12.0).max(44.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
     keytip_badge(ui, r, id, &label.replace('\n', " "));
@@ -174,7 +180,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     let mut y = r.min.y + BIG_LABEL_Y;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
-        label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, menu && i + 1 == lines.len());
+        label_line(ui, r.center().x, y, l, regular(RIBBON_LABEL_PT), if on { t.text } else { t.text_disabled }, menu && i + 1 == lines.len());
         y += LABEL_PITCH;
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
@@ -189,7 +195,8 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let t = Tokens::get(ui.ctx());
-    let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
+    let text_w =
+        label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(RIBBON_LABEL_PT), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
@@ -198,7 +205,13 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
-        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), if on { t.text } else { t.text_disabled });
+        ui.painter().text(
+            pos2(r.min.x + 24.0, r.center().y),
+            Align2::LEFT_CENTER,
+            l,
+            regular(RIBBON_LABEL_PT),
+            if on { t.text } else { t.text_disabled },
+        );
     }
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
@@ -271,7 +284,7 @@ pub fn menu_button(
         let galley_w = label
             .unwrap_or("")
             .split('\n')
-            .map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x))
+            .map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(RIBBON_LABEL_PT), t.text).size().x))
             .fold(0.0, f32::max);
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
@@ -281,18 +294,19 @@ pub fn menu_button(
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
         let mut y = r.min.y + BIG_LABEL_Y;
         for (i, l) in lines.iter().enumerate() {
-            label_line(ui, r.center().x, y, l, regular(11.5), text, i + 1 == lines.len());
+            label_line(ui, r.center().x, y, l, regular(RIBBON_LABEL_PT), text, i + 1 == lines.len());
             y += LABEL_PITCH;
         }
         resp
     } else {
-        let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
+        let text_w =
+            label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(RIBBON_LABEL_PT), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
         if let Some(l) = label {
-            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
+            ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(RIBBON_LABEL_PT), text);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
@@ -875,7 +889,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::theme::font_definitions(false, false));
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
-        let h = ctx.fonts_mut(|f| f.layout_no_wrap("Page Number Mail Merge gjpqy".into(), crate::theme::regular(11.5), Color32::WHITE).size().y);
+        let h = ctx.fonts_mut(|f| f.layout_no_wrap("Page Number Mail Merge gjpqy".into(), regular(RIBBON_LABEL_PT), Color32::WHITE).size().y);
         assert!(h <= LABEL_LINE_H, "label line is {h} px tall");
     }
 

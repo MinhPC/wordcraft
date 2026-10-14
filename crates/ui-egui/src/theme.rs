@@ -529,9 +529,9 @@ impl TypeRung {
     /// Font size in points.
     pub fn size(self) -> f32 {
         match self {
-            TypeRung::Chrome => 12.5,
-            TypeRung::Control => 11.5,
-            TypeRung::Caption => 11.0,
+            TypeRung::Chrome => 13.0,
+            TypeRung::Control => 12.0,
+            TypeRung::Caption => 11.5,
         }
     }
     /// Extra letter-spacing in points (em-relative, so it scales with the size).
